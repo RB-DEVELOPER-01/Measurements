@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>AR Pro Measure</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0f172a;
+      color: #fff;
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    /* Landing Screen before AR Starts */
+    #start-screen {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      height: 100%;
+      padding: 24px;
+      text-align: center;
+    }
+    #start-screen h1 { font-size: 26px; margin-bottom: 10px; color: #00ff88; }
+    #start-screen p { font-size: 14px; color: #94a3b8; margin-bottom: 28px; max-width: 320px; }
+    #start-ar-btn {
+      background: #00ff88;
+      color: #0f172a;
+      border: none;
+      padding: 16px 32px;
+      font-size: 17px;
+      font-weight: 700;
+      border-radius: 30px;
+      cursor: pointer;
+    }
+
+    /* AR HUD Overlay */
+    #overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    /* Top Readout Card */
+    .top-card {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      right: 16px;
+      background: rgba(15, 23, 42, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 16px;
+      padding: 14px;
+      text-align: center;
+      pointer-events: auto;
+    }
+    #status-text { font-size: 13px; color: #94a3b8; margin-bottom: 4px; }
+    .readout {
+      display: flex;
+      justify-content: center;
+      align-items: baseline;
+      gap: 6px;
+      margin: 4px 0 10px;
+    }
+    #distance-val { font-size: 40px; font-weight: 800; color: #00ff88; font-variant-numeric: tabular-nums; }
+    #distance-unit { font-size: 20px; font-weight: 600; color: #fff; }
+
+    /* Unit Switcher Buttons */
+    .unit-bar {
+      display: flex;
+      justify-content: center;
+      gap: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      padding: 4px;
+      border-radius: 10px;
+    }
+    .unit-btn {
+      flex: 1;
+      background: transparent;
+      color: #cbd5e1;
+      border: none;
+      padding: 7px 0;
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: 7px;
+    }
+    .unit-btn.active { background: #00e5ff; color: #0f172a; font-weight: 700; }
+
+    /* Center Crosshair */
+    .crosshair {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 32px;
+      height: 32px;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .crosshair-dot { width: 6px; height: 6px; background: #00ff88; border-radius: 50%; }
+
+    /* Bottom Action Controls */
+    .bottom-bar {
+      position: absolute;
+      bottom: 28px;
+      left: 16px;
+      right: 16px;
+      display: flex;
+      gap: 12px;
+      pointer-events: auto;
+    }
+    #reset-btn {
+      background: rgba(30, 41, 59, 0.92);
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      padding: 16px 22px;
+      border-radius: 30px;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    #lock-btn {
+      flex: 1;
+      background: #00ff88;
+      color: #0f172a;
+      border: none;
+      padding: 16px;
+      border-radius: 30px;
+      font-size: 17px;
+      font-weight: 700;
+    }
+    #lock-btn:disabled { background: #475569; color: #94a3b8; }
+  </style>
+</head>
+<body>
+
+  <div id="start-screen">
+    <h1>AR 3D Tape Measure</h1>
+    <p>Lock 3D points on physical surfaces using ARCore and switch between SI units anytime.</p>
+    <button id="start-ar-btn">Launch AR Camera</button>
+  </div>
+
+  <div id="overlay">
+    <div class="top-card">
+      <div id="status-text">Move phone slowly to scan surface...</div>
+      <div class="readout">
+        <span id="distance-val">0.0</span>
+        <span id="distance-unit">cm</span>
+      </div>
+      <div class="unit-bar" id="unit-bar">
+        <button class="unit-btn" data-unit="m">m (SI)</button>
+        <button class="unit-btn active" data-unit="cm">cm</button>
+        <button class="unit-btn" data-unit="mm">mm</button>
+        <button class="unit-btn" data-unit="in">in</button>
+        <button class="unit-btn" data-unit="ft">ft</button>
+      </div>
+    </div>
+
+    <div class="crosshair"><div class="crosshair-dot"></div></div>
+
+    <div class="bottom-bar">
+      <button id="reset-btn">Clear</button>
+      <button id="lock-btn" disabled>+ Lock Point A</button>
+    </div>
+  </div>
+
+  <script>
+    const UNITS = {
+      m:  { factor: 1,          precision: 3 },
+      cm: { factor: 100,        precision: 1 },
+      mm: { factor: 1000,       precision: 0 },
+      in: { factor: 39.3700787, precision: 2 },
+      ft: { factor: 3.2808399,  precision: 2 }
+    };
+
+    let selectedUnit = 'cm';
+    let pointA = null;
+    let pointB = null;
+    let currentHitPosition = null;
+    let distanceMeters = 0;
+
+    let camera, scene, renderer;
+    let reticle, markerA, markerB, measureLine;
+    let hitTestSource = null;
+    let referenceSpace = null;
+
+    const statusText = document.getElementById('status-text');
+    const distanceVal = document.getElementById('distance-val');
+    const distanceUnit = document.getElementById('distance-unit');
+    const lockBtn = document.getElementById('lock-btn');
+    const resetBtn = document.getElementById('reset-btn');
+    const overlay = document.getElementById('overlay');
+    const startBtn = document.getElementById('start-ar-btn');
+
+    function updateDisplay() {
+      const cfg = UNITS[selectedUnit];
+      distanceVal.textContent = (distanceMeters * cfg.factor).toFixed(cfg.precision);
+      distanceUnit.textContent = selectedUnit;
+    }
+
+    // Unit Switcher Logic
+    document.querySelectorAll('.unit-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.querySelectorAll('.unit-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        selectedUnit = btn.getAttribute('data-unit');
+        updateDisplay();
+      });
+    });
+
+    // Lock Point A / Point B Logic
+    lockBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!currentHitPosition) return;
+
+      if (!pointA) {
+        pointA = currentHitPosition.clone();
+        markerA.position.copy(pointA);
+        markerA.visible = true;
+        measureLine.visible = true;
+        lockBtn.textContent = '+ Lock Point B';
+        statusText.textContent = 'Move to second point & tap Lock Point B';
+      } else if (!pointB) {
+        pointB = currentHitPosition.clone();
+        markerB.position.copy(pointB);
+        markerB.visible = true;
+        updateLineGeometry(pointA, pointB);
+        distanceMeters = pointA.distanceTo(pointB);
+        updateDisplay();
+        lockBtn.textContent = 'New Point A';
+        statusText.textContent = 'Measurement Locked in 3D Space';
+      } else {
+        // Start a fresh measurement at current target
+        pointA = currentHitPosition.clone();
+        pointB = null;
+        markerA.position.copy(pointA);
+        markerA.visible = true;
+        markerB.visible = false;
+        lockBtn.textContent = '+ Lock Point B';
+        statusText.textContent = 'Move to second point & tap Lock Point B';
+      }
+    });
+
+    // Clear Points Logic
+    resetBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      pointA = null;
+      pointB = null;
+      distanceMeters = 0;
+      if (markerA) markerA.visible = false;
+      if (markerB) markerB.visible = false;
+      if (measureLine) measureLine.visible = false;
+      lockBtn.textContent = '+ Lock Point A';
+      statusText.textContent = currentHitPosition
+        ? 'Aim at start point & tap Lock Point A'
+        : 'Move phone slowly to scan surface...';
+      updateDisplay();
+    });
+
+    function updateLineGeometry(p1, p2) {
+      const positions = measureLine.geometry.attributes.position.array;
+      positions[0] = p1.x; positions[1] = p1.y; positions[2] = p1.z;
+      positions[3] = p2.x; positions[4] = p2.y; positions[5] = p2.z;
+      measureLine.geometry.attributes.position.needsUpdate = true;
+    }
+
+    async function startAR() {
+      if (!navigator.xr) {
+        alert('WebXR not supported on this browser. Please open in Android Chrome.');
+        return;
+      }
+
+      try {
+        const session = await navigator.xr.requestSession('immersive-ar', {
+          requiredFeatures: ['hit-test'],
+          optionalFeatures: ['dom-overlay'],
+          domOverlay: { root: overlay }
+        });
+
+        overlay.style.display = 'block';
+        document.getElementById('start-screen').style.display = 'none';
+
+        scene = new THREE.Scene();
+        camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.xr.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        await renderer.xr.setSession(session);
+
+        // 3D Target Reticle Ring on detected surface
+        const ringGeo = new THREE.RingGeometry(0.015, 0.022, 32).rotateX(-Math.PI / 2);
+        const ringMat = new THREE.MeshBasicMaterial({ color: 0xffcc00 });
+        reticle = new THREE.Mesh(ringGeo, ringMat);
+        reticle.matrixAutoUpdate = false;
+        reticle.visible = false;
+        scene.add(reticle);
+
+        // 3D Spheres for Locked Point A and Point B
+        const sphereGeo = new THREE.SphereGeometry(0.012, 16, 16);
+        const sphereMat = new THREE.MeshBasicMaterial({ color: 0x00ff88 });
+        markerA = new THREE.Mesh(sphereGeo, sphereMat);
+        markerB = new THREE.Mesh(sphereGeo, sphereMat);
+        markerA.visible = false;
+        markerB.visible = false;
+        scene.add(markerA);
+        scene.add(markerB);
+
+        // 3D Line connecting Point A and Point B
+        const lineGeo = new THREE.BufferGeometry();
+        lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+        const lineMat = new THREE.LineBasicMaterial({ color: 0x00e5ff, linewidth: 4 });
+        measureLine = new THREE.Line(lineGeo, lineMat);
+        measureLine.frustumCulled = false;
+        measureLine.visible = false;
+        scene.add(measureLine);
+
+        const viewerSpace = await session.requestReferenceSpace('viewer');
+        referenceSpace = await session.requestReferenceSpace('local');
+        hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
+
+        renderer.setAnimationLoop((timestamp, frame) => {
+          if (!frame) return;
+
+          const hitTestResults = frame.getHitTestResults(hitTestSource);
+          if (hitTestResults.length > 0) {
+            const hit = hitTestResults[0];
+            const pose = hit.getPose(referenceSpace);
+
+            reticle.visible = true;
+            reticle.matrix.fromArray(pose.transform.matrix);
+
+            if (!currentHitPosition) {
+              currentHitPosition = new THREE.Vector3();
+              lockBtn.disabled = false;
+              if (!pointA) statusText.textContent = 'Aim at start point & tap Lock Point A';
+            }
+            currentHitPosition.setFromMatrixPosition(reticle.matrix);
+
+            // Live stretch measurement while moving from Point A to Point B
+            if (pointA && !pointB) {
+              updateLineGeometry(pointA, currentHitPosition);
+              distanceMeters = pointA.distanceTo(currentHitPosition);
+              updateDisplay();
+            }
+          } else {
+            reticle.visible = false;
+          }
+
+          renderer.render(scene, camera);
+        });
+      } catch (err) {
+        alert('Failed to start AR: ' + err.message);
+      }
+    }
+
+    startBtn.addEventListener('click', startAR);
+  </script>
+</body>
+</html>
